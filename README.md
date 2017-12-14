@@ -7,12 +7,16 @@ Right now, it only works on linux because of the cadaver dependency (used to act
 
 - python3
 - selenium
-- chromium-chromedriver
 - cadaver
+- chromedriver
 
-Install with:
+Install linux dependencies with:
 
-> sudo apt-get install python3 selenium chromium-chromedriver cadaver
+> sudo apt-get install python3 selenium cadaver chromium-chromedriver
+
+I set this up on WSL in win10, so I followed the instructions at http://ngauthier.com/2017/09/rails-system-tests-with-headless-chrome-on-windows-bash-wsl.html to set up chromedriver in Windows to be able to interact with my scripts.  This is probably easier if you stick to a native linux instead of doing this, but it does work.  Basically just download it and add it to your path, is all.
+
+Also, you need to have a phone that allows push notifications enabled for DUO two-factor authentication.
 
 ## Usage
 
