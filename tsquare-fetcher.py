@@ -169,6 +169,8 @@ def process_directory(root, path):
 
 
 print('Starting to fetch files...')
+numsites = len(site_links.keys())
+currentnum = 0
 with Popen([], executable='/usr/bin/cadaver', stdin=PIPE, stdout=PIPE, stderr=PIPE) as proc:
     fcntl(proc.stdout.fileno(), F_SETFL, O_NONBLOCK)
     # fcntl(proc.stderr.fileno(), F_SETFL, O_NONBLOCK)
@@ -195,25 +197,11 @@ with Popen([], executable='/usr/bin/cadaver', stdin=PIPE, stdout=PIPE, stderr=PI
         proc.stdin.flush()
         wait_for(q, 'dav:/dav/')
         rename(internal_name, external_name)
-        break
+        currentnum += 1
+        print('\n\n\n\n\nFinished {} sites of {}\n\n\n\n\n'.format(currentnum, numsites))
     proc.stdin.write('quit\n'.encode())
     proc.stdin.flush()
 
 
 
 print('Finished!  Everything should be downloaded now.')
-
-
-
-
-
-
-# from fcntl import fcntl, F_SETFL
-# from getpass import getpass
-# from os import O_NONBLOCK
-# from re import compile
-# from subprocess import Popen, PIPE
-# proc = Popen([], executable='/mnt/c/Users/mr234/Dropbox (Personal)/Documents/Projects/tsquare-fetcher/echo.sh', stdin=PIPE, stdout=PIPE, stderr=PIPE)
-# fcntl(proc.stdout.fileno(), F_SETFL, O_NONBLOCK)
-# fcntl(proc.stderr.fileno(), F_SETFL, O_NONBLOCK)
-# fcntl(proc.stdin.fileno(), F_SETFL, O_NONBLOCK)
