@@ -18,7 +18,9 @@ Install with:
 
 - Download the scripts and put them in a folder where you want the files to end up.
 - Create a ~/.netrc file with the contents:
-> Machine: t-square.gatech.edu
-> Login: <username>
-> Password: <password>
+```
+Machine: t-square.gatech.edu
+Login: <username>
+Password: <password>
+```
 - Run tsquare-fetcher.py and get ready to wait.
