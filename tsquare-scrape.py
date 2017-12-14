@@ -1,6 +1,5 @@
 #!/usr/bin/python3
 
-import time
 
 from os.path import expanduser
 from selenium import webdriver
@@ -56,21 +55,44 @@ if 'Two-factor login is needed' in driver.page_source:
     driver.switch_to_default_content()
 
 # we should be logged in and in tsquare now
+WebDriverWait(driver, 60).until(expected_conditions.presence_of_element_located((By.XPATH, '//*[@id="siteLinkList"]/li[1]/a/span')))
+# go to the worksite list
 assert 'Worksite Setup' in driver.page_source
+worksite_link = driver.find_element_by_link_text('Worksite Setup')
+worksite_link.click()
+
+site_links = {}
+
+# wait and find the worksite iframe
+WebDriverWait(driver, 60).until(expected_conditions.presence_of_element_located((By.CSS_SELECTOR, 'iframe[title="Worksite Setup "]')))
+iframe = driver.find_elements_by_css_selector('iframe[title="Worksite Setup "]')[0]
+driver.switch_to_frame(iframe.get_attribute('id'))
+
+print('switched to inner iframe')
 
 
+# scrape the actual worksite links
+WebDriverWait(driver, 10).until(expected_conditions.presence_of_element_located((By.NAME, 'eventSubmit_doList_next')))
+next_button = driver.find_element_by_name('eventSubmit_doList_next')
+titles = driver.find_elements_by_css_selector('td[headers="title"]')
+for title in titles:
+    link = title.find_element_by_tag_name('a')
+    site_links[link.text] = link.get_attribute('href').split('/')[-1]
+    print(link.text + ':     ' + link.get_attribute('href').split('/')[-1])
 
+while not next_button.get_attribute('disabled'):
+    next_button.click()
+    WebDriverWait(driver, 10).until(expected_conditions.staleness_of(titles[-1]))
+    WebDriverWait(driver, 10).until(expected_conditions.presence_of_element_located((By.CSS_SELECTOR, 'td[headers="title"]')))
+    # driver.switch_to_frame(iframe.get_attribute('id'))
+    titles = driver.find_elements_by_css_selector('td[headers="title"]')
+    for title in titles:
+        link = title.find_element_by_tag_name('a')
+        if link.text != 'My Workspace':
+            site_links[link.text] = link.get_attribute('href').split('/')[-1]
+            print(link.text + ':     ' + link.get_attribute('href').split('/')[-1])
+    next_button = driver.find_element_by_name('eventSubmit_doList_next')
 
-
-
-
-
-
-
-
-
-
-
+print(len(site_links.keys()))
 
 # driver.close()
-
