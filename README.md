@@ -2,7 +2,10 @@
 
 This is a utility to traverse the entirety of your t-square site and download all of the resources for each site that you're a member of.  It'll create directories for each site and download into them.  Note that this will take quite a while, since it downloads files one at a time (intentionally, so that you don't cause too much of a load on the servers).  Note that there's a very real possibility that someone will realize that you're doing this and may get upset that you're clogging things up!  Use at your own risk.
 
-Right now, it only works on linux because of the cadaver dependency (used to actually fetch the files).  
+Right now, it only works on linux because of the cadaver dependency (used to actually fetch the files).
+
+Occasionally, it will get hung up on a file.  I'm not sure why, but if it seems to be stuck (check and make sure it's not just busy downloading a large file), then you can cancel it with ctrl-c, and restart it to let it continue.
+
 ## Dependencies:
 
 - python3

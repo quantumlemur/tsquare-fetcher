@@ -21,7 +21,7 @@ username = ''
 password = ''
 
 
-filename_pattern = compile('[^\w\-_\. /\n)()]')
+filename_pattern = compile('[^\w\-_\. /+\n)(),&]')
 filepat = compile(r"""        (.+?) +[0-9]+ +[A-Za-z]{3} +[0-9]{1,2} +[0-9:]{3,5}""")
 dirpat = compile(r"""Coll:   (.+?) +[0-9]+ +[A-Za-z]{3} +[0-9]{1,2} +[0-9]{4}""")
 
@@ -35,7 +35,7 @@ with open(expanduser('~/.netrc'), 'r') as f:
 
 
 # initialize the webdriver and start the tsquare login process
-print('trying to log in to tsquare... get out your phone and be ready to approve the two-factor auth!')
+print('Trying to log in to tsquare... get out your phone and be ready to approve the two-factor auth!')
 options = webdriver.ChromeOptions()
 options.add_argument('--headless')
 driver = webdriver.Chrome(chrome_options=options)
@@ -117,6 +117,8 @@ driver.close()
 
 
 
+
+
 def output_reader(proc, outq):
     lastread = 0
     out = b''
@@ -126,10 +128,16 @@ def output_reader(proc, outq):
             if a:
                 lastread = time()
                 out += a
-            if out!=b'' and (out[-1]==b'\n' or out[-3:]==b'/> ' or time()-lastread>3):
+            if out != b'' and time() - lastread > 5:
                 lines = out.decode('utf-8').split('\n')
                 for line in lines:
-                    print('          ' + line)
+                    print('     TIMEOUT: ' + line)
+                    outq.put(line)
+                out = b''
+            elif out!=b'' and (out[-1]==b'\n' or out[-3:]==b'/> '):
+                lines = out.decode('utf-8').split('\n')
+                for line in lines:
+                    # print('          ' + line)
                     outq.put(line)
                 out = b''
         except ValueError:
@@ -145,6 +153,7 @@ def process_directory(root, path):
     fullpath = filename_pattern.sub('_', root+'/'+path)
     if not exists(fullpath):
         makedirs(fullpath)
+    print(fullpath)
     proc.stdin.write(('lcd "' + filename_pattern.sub('_', "{}/{}".format(root, path)) + '"\n').encode())
     proc.stdin.flush()
     wait_for(q, 'dav:/dav/')
@@ -156,8 +165,9 @@ def process_directory(root, path):
         # print(line)
         filematch = filepat.match(line)
         if filematch:
-            print('file matched:     ' + filematch.group(1))
+            # print('file matched:     ' + filematch.group(1))
             filepath = filename_pattern.sub('_', "{}/{}/{}".format(root, path, filematch.group(1)))
+            print(filepath)
             if not exists(filepath):
                 proc.stdin.write('get "/dav/{}/{}"\n'.format(path, filematch.group(1)).encode())
                 proc.stdin.flush()
@@ -165,10 +175,11 @@ def process_directory(root, path):
         else:
             dirmatch = dirpat.match(line)
             if dirmatch:
-                print('directory matched:     ' + dirmatch.group(1))
+                # print('directory matched:     ' + dirmatch.group(1))
                 process_directory(root, path+'/'+dirmatch.group(1))
             else:
-                print('*** not matched ***     ' + line)
+                pass
+                # print('*** not matched ***     ' + line)
 
 
 print('Starting to fetch files...')
@@ -192,6 +203,7 @@ with Popen([], executable='/usr/bin/cadaver', stdin=PIPE, stdout=PIPE, stderr=PI
     wait_for(q, 'dav:')
 
     for external_name, internal_name in site_links.items():
+        print('Starting download of ' + external_name)
         proc.stdin.write('open https://t-square.gatech.edu/dav/{}\n'.format(internal_name).encode())
         proc.stdin.flush()
         wait_for(q, 'dav:/dav/')
