@@ -3,7 +3,7 @@
 from fcntl import fcntl, F_SETFL
 # from getpass import getpass
 from os import O_NONBLOCK, makedirs, rename
-from os.path import expanduser
+from os.path import expanduser, exists
 from queue import Queue
 from re import compile
 from selenium import webdriver
@@ -13,12 +13,17 @@ from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.ui import WebDriverWait
 from subprocess import Popen, PIPE
 from threading import Thread
-from time import time
+from time import time, sleep
 
 
 
 username = ''
 password = ''
+
+
+filename_pattern = compile('[^\w\-_\. /\n)()]')
+filepat = compile(r"""        (.+?) +[0-9]+ +[A-Za-z]{3} +[0-9]{1,2} +[0-9:]{3,5}""")
+dirpat = compile(r"""Coll:   (.+?) +[0-9]+ +[A-Za-z]{3} +[0-9]{1,2} +[0-9]{4}""")
 
 # read the login info from the .netrc file
 with open(expanduser('~/.netrc'), 'r') as f:
@@ -32,8 +37,8 @@ with open(expanduser('~/.netrc'), 'r') as f:
 # initialize the webdriver and start the tsquare login process
 print('trying to log in to tsquare... get out your phone and be ready to approve the two-factor auth!')
 options = webdriver.ChromeOptions()
-options.add_argument('headless')
-driver = webdriver.Chrome()
+options.add_argument('--headless')
+driver = webdriver.Chrome(chrome_options=options)
 driver.get("https://login.gatech.edu/cas/login?service=https%3A%2F%2Ft-square.gatech.edu%2Fsakai-login-tool%2Fcontainer")
 assert "GT Login" in driver.title
 
@@ -82,7 +87,6 @@ print('switched to inner iframe')
 
 
 # scrape the actual worksite links
-filename_pattern = compile('[^\w\-_\. ]')
 WebDriverWait(driver, 10).until(expected_conditions.presence_of_element_located((By.NAME, 'eventSubmit_doList_next')))
 next_button = driver.find_element_by_name('eventSubmit_doList_next')
 titles = driver.find_elements_by_css_selector('td[headers="title"]')
@@ -113,8 +117,6 @@ driver.close()
 
 
 
-
-
 def output_reader(proc, outq):
     lastread = 0
     out = b''
@@ -127,7 +129,7 @@ def output_reader(proc, outq):
             if out!=b'' and (out[-1]==b'\n' or out[-3:]==b'/> ' or time()-lastread>3):
                 lines = out.decode('utf-8').split('\n')
                 for line in lines:
-                    # print('.....' + line)
+                    print('          ' + line)
                     outq.put(line)
                 out = b''
         except ValueError:
@@ -139,12 +141,11 @@ def wait_for(q, s):
         out.append(q.get())
     return out
 
-filepat = compile(r"""        (.+?) +[0-9]+ +[A-Za-z]{3} +[0-9]{1,2} +[0-9:]{3,5}""")
-dirpat = compile(r"""Coll:   (.+?) +[0-9]+ +[A-Za-z]{3} +[0-9]{1,2} +[0-9]{4}""")
-
 def process_directory(root, path):
-    makedirs(path)
-    proc.stdin.write('lcd "{}/{}"\n'.format(root, path).encode())
+    fullpath = filename_pattern.sub('_', root+'/'+path)
+    if not exists(fullpath):
+        makedirs(fullpath)
+    proc.stdin.write(('lcd "' + filename_pattern.sub('_', "{}/{}".format(root, path)) + '"\n').encode())
     proc.stdin.flush()
     wait_for(q, 'dav:/dav/')
     proc.stdin.write('ls "/dav/{}"\n'.format(path).encode())
@@ -152,20 +153,22 @@ def process_directory(root, path):
     for line in wait_for(q, 'dav:/dav/'):
         if 'collection is empty' in line:
             return
-        print(line)
+        # print(line)
         filematch = filepat.match(line)
         if filematch:
-            print('file matched')
-            proc.stdin.write('get "/dav/{}/{}"\n'.format(path, filematch.group(1)).encode())
-            proc.stdin.flush()
-            wait_for(q, 'dav:/dav/')
+            print('file matched:     ' + filematch.group(1))
+            filepath = filename_pattern.sub('_', "{}/{}/{}".format(root, path, filematch.group(1)))
+            if not exists(filepath):
+                proc.stdin.write('get "/dav/{}/{}"\n'.format(path, filematch.group(1)).encode())
+                proc.stdin.flush()
+                wait_for(q, 'dav:/dav/')
         else:
             dirmatch = dirpat.match(line)
             if dirmatch:
-                print('directory matched')
+                print('directory matched:     ' + dirmatch.group(1))
                 process_directory(root, path+'/'+dirmatch.group(1))
             else:
-                print('*** not matched ***')
+                print('*** not matched ***     ' + line)
 
 
 print('Starting to fetch files...')
@@ -179,29 +182,39 @@ with Popen([], executable='/usr/bin/cadaver', stdin=PIPE, stdout=PIPE, stderr=PI
     q = Queue()
     t = Thread(target=output_reader, args=(proc, q))
     t.start()
+    root_dir = ''
+    proc.stdin.write(b'lpwd\n')
+    proc.stdin.flush()
+    for line in wait_for(q, 'Local'):
+        if line[:17] == 'Local directory: ':
+            root_dir = line[17:] + '/files'
+    print(root_dir)
+    wait_for(q, 'dav:')
 
     for external_name, internal_name in site_links.items():
         proc.stdin.write('open https://t-square.gatech.edu/dav/{}\n'.format(internal_name).encode())
         proc.stdin.flush()
         wait_for(q, 'dav:/dav/')
 
-        root_dir = ''
-        proc.stdin.write(b'lpwd\n')
-        proc.stdin.flush()
-        for line in wait_for(q, 'dav:/dav/'):
-            if line[:17] == 'Local directory: ':
-                root_dir = line[17:]
-
         process_directory(root_dir, internal_name)
         proc.stdin.write('lcd "{}"\n'.format(root_dir).encode())
         proc.stdin.flush()
         wait_for(q, 'dav:/dav/')
-        rename(internal_name, external_name)
         currentnum += 1
         print('\n\n\n\n\nFinished {} sites of {}\n\n\n\n\n'.format(currentnum, numsites))
     proc.stdin.write('quit\n'.encode())
     proc.stdin.flush()
 
 
+print('Renaming folders...')
+for external_name, internal_name in site_links.items():
+    success = False
+    while not success:
+        try:
+            rename('files/'+internal_name, 'files/'+external_name)
+            success = True
+        except:
+            sleep(1)
 
-print('Finished!  Everything should be downloaded now.')
+
+print('All finished!  Everything should be downloaded now.')
