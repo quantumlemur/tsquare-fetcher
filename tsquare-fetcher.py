@@ -2,7 +2,7 @@
 
 from fcntl import fcntl, F_SETFL
 # from getpass import getpass
-from os import O_NONBLOCK, makedirs, rename
+from os import O_NONBLOCK, makedirs, rename, stat
 from os.path import expanduser, exists
 from queue import Queue
 from re import compile
@@ -21,8 +21,8 @@ username = ''
 password = ''
 
 
-filename_pattern = compile('[^\w\-_\. /+\n)(),&]')
-filepat = compile(r"""        (.+?) +[0-9]+ +[A-Za-z]{3} +[0-9]{1,2} +[0-9:]{3,5}""")
+filename_pattern = compile('[^\w\-_\. /+\n)(,&]')
+filepat = compile(r"""        (.+?) +([0-9]+) +[A-Za-z]{3} +[0-9]{1,2} +[0-9:]{3,5}""")
 dirpat = compile(r"""Coll:   (.+?) +[0-9]+ +[A-Za-z]{3} +[0-9]{1,2} +[0-9]{4}""")
 
 # read the login info from the .netrc file
@@ -33,6 +33,9 @@ with open(expanduser('~/.netrc'), 'r') as f:
         if line[:8] == 'password':
             password = line.split()[1]
 
+
+
+## Phase 1: Log in to tsquare and scrape the list of sites to download
 
 # initialize the webdriver and start the tsquare login process
 print('Trying to log in to tsquare... get out your phone and be ready to approve the two-factor auth!')
@@ -76,14 +79,12 @@ assert 'Worksite Setup' in driver.page_source
 worksite_link = driver.find_element_by_link_text('Worksite Setup')
 worksite_link.click()
 
-site_links = {}
+site_links = []
 
 # wait and find the worksite iframe
 WebDriverWait(driver, 60).until(expected_conditions.presence_of_element_located((By.CSS_SELECTOR, 'iframe[title="Worksite Setup "]')))
 iframe = driver.find_elements_by_css_selector('iframe[title="Worksite Setup "]')[0]
 driver.switch_to_frame(iframe.get_attribute('id'))
-
-print('switched to inner iframe')
 
 
 # scrape the actual worksite links
@@ -92,8 +93,9 @@ next_button = driver.find_element_by_name('eventSubmit_doList_next')
 titles = driver.find_elements_by_css_selector('td[headers="title"]')
 for title in titles:
     link = title.find_element_by_tag_name('a')
-    site_links[filename_pattern.sub('_', link.text)] = link.get_attribute('href').split('/')[-1]
-    print('Found site: ' + link.text)
+    if link.text != 'My Workspace':
+        site_links.append((filename_pattern.sub('_', link.text), link.get_attribute('href').split('/')[-1]))
+        print('Found site: ' + link.text)
 
 while not next_button.get_attribute('disabled'):
     next_button.click()
@@ -104,11 +106,11 @@ while not next_button.get_attribute('disabled'):
     for title in titles:
         link = title.find_element_by_tag_name('a')
         if link.text != 'My Workspace':
-            site_links[filename_pattern.sub('_', link.text)] = link.get_attribute('href').split('/')[-1]
+            site_links.append((filename_pattern.sub('_', link.text), link.get_attribute('href').split('/')[-1]))
             print('Found site: ' + link.text)
     next_button = driver.find_element_by_name('eventSubmit_doList_next')
 
-print('Site collection finished!  {} sites found.'.format(len(site_links.keys())))
+print('Site collection finished!  {} sites found.'.format(len(site_links)))
 
 driver.close()
 
@@ -116,8 +118,7 @@ driver.close()
 
 
 
-
-
+## Phase two: actually fetching the files
 
 def output_reader(proc, outq):
     lastread = 0
@@ -149,15 +150,15 @@ def wait_for(q, s):
         out.append(q.get())
     return out
 
-def process_directory(root, path):
-    fullpath = filename_pattern.sub('_', root+'/'+path)
+def process_directory(root, internal_name, human_name, subdir=''):
+    fullpath = root + human_name + subdir
     if not exists(fullpath):
         makedirs(fullpath)
-    print(fullpath)
-    proc.stdin.write(('lcd "' + filename_pattern.sub('_', "{}/{}".format(root, path)) + '"\n').encode())
-    proc.stdin.flush()
-    wait_for(q, 'dav:/dav/')
-    proc.stdin.write('ls "/dav/{}"\n'.format(path).encode())
+    print(human_name + subdir)
+    # proc.stdin.write('lcd "{}/{}"'.format(root, path)).encode()
+    # proc.stdin.flush()
+    # wait_for(q, 'dav:/dav/')
+    proc.stdin.write('ls "/dav/{}{}"\n'.format(internal_name, subdir).encode())
     proc.stdin.flush()
     for line in wait_for(q, 'dav:/dav/'):
         if 'collection is empty' in line:
@@ -166,24 +167,24 @@ def process_directory(root, path):
         filematch = filepat.match(line)
         if filematch:
             # print('file matched:     ' + filematch.group(1))
-            filepath = filename_pattern.sub('_', "{}/{}/{}".format(root, path, filematch.group(1)))
-            print(filepath)
-            if not exists(filepath):
-                proc.stdin.write('get "/dav/{}/{}"\n'.format(path, filematch.group(1)).encode())
+            filepath = "{}{}{}{}".format(root, human_name, subdir, filematch.group(1))
+            print(human_name + subdir + filematch.group(1))
+            if not exists(filepath) or stat(filepath).st_size != int(filematch.group(2)):
+                proc.stdin.write('get "/dav/{}{}{}" "{}{}{}{}"\n'.format(internal_name, subdir, filematch.group(1), root, human_name, subdir, filematch.group(1)).encode())
                 proc.stdin.flush()
+                # print('get "/dav/{}{}{}" "{}{}{}{}"\n'.format(internal_name, subdir, filematch.group(1), root, human_name, subdir, filematch.group(1)).encode())
                 wait_for(q, 'dav:/dav/')
         else:
             dirmatch = dirpat.match(line)
             if dirmatch:
-                # print('directory matched:     ' + dirmatch.group(1))
-                process_directory(root, path+'/'+dirmatch.group(1))
+                process_directory(root, internal_name, human_name, subdir+dirmatch.group(1)+'/')
             else:
                 pass
                 # print('*** not matched ***     ' + line)
 
 
 print('Starting to fetch files...')
-numsites = len(site_links.keys())
+numsites = len(site_links)
 currentnum = 0
 with Popen([], executable='/usr/bin/cadaver', stdin=PIPE, stdout=PIPE, stderr=PIPE) as proc:
     fcntl(proc.stdout.fileno(), F_SETFL, O_NONBLOCK)
@@ -198,17 +199,17 @@ with Popen([], executable='/usr/bin/cadaver', stdin=PIPE, stdout=PIPE, stderr=PI
     proc.stdin.flush()
     for line in wait_for(q, 'Local'):
         if line[:17] == 'Local directory: ':
-            root_dir = line[17:] + '/files'
+            root_dir = line[17:] + '/files/'
     print(root_dir)
     wait_for(q, 'dav:')
 
-    for external_name, internal_name in site_links.items():
+    for (external_name, internal_name) in site_links:
         print('Starting download of ' + external_name)
         proc.stdin.write('open https://t-square.gatech.edu/dav/{}\n'.format(internal_name).encode())
         proc.stdin.flush()
         wait_for(q, 'dav:/dav/')
 
-        process_directory(root_dir, internal_name)
+        process_directory(root_dir, internal_name+'/', filename_pattern.sub('_', external_name+'/'))
         proc.stdin.write('lcd "{}"\n'.format(root_dir).encode())
         proc.stdin.flush()
         wait_for(q, 'dav:/dav/')
@@ -216,17 +217,6 @@ with Popen([], executable='/usr/bin/cadaver', stdin=PIPE, stdout=PIPE, stderr=PI
         print('\n\n\n\n\nFinished {} sites of {}\n\n\n\n\n'.format(currentnum, numsites))
     proc.stdin.write('quit\n'.encode())
     proc.stdin.flush()
-
-
-print('Renaming folders...')
-for external_name, internal_name in site_links.items():
-    success = False
-    while not success:
-        try:
-            rename('files/'+internal_name, 'files/'+external_name)
-            success = True
-        except:
-            sleep(1)
 
 
 print('All finished!  Everything should be downloaded now.')
