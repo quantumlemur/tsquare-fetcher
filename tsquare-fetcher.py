@@ -40,7 +40,7 @@ with open(expanduser('~/.netrc'), 'r') as f:
 # initialize the webdriver and start the tsquare login process
 print('Trying to log in to tsquare... get out your phone and be ready to approve the two-factor auth!')
 options = webdriver.ChromeOptions()
-options.add_argument('--headless')
+# options.add_argument('--headless')
 driver = webdriver.Chrome(chrome_options=options)
 driver.get("https://login.gatech.edu/cas/login?service=https%3A%2F%2Ft-square.gatech.edu%2Fsakai-login-tool%2Fcontainer")
 assert "GT Login" in driver.title
