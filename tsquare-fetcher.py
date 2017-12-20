@@ -1,8 +1,8 @@
 #!/usr/bin/python3
 
 from fcntl import fcntl, F_SETFL
-# from getpass import getpass
-from os import O_NONBLOCK, makedirs, rename, stat
+from math import floor
+from os import O_NONBLOCK, makedirs, rename, stat, popen
 from os.path import expanduser, exists
 from queue import Queue
 from re import compile
@@ -14,6 +14,13 @@ from selenium.webdriver.support.ui import WebDriverWait
 from subprocess import Popen, PIPE
 from threading import Thread
 from time import time, sleep
+
+
+
+
+
+debug = False
+
 
 
 
@@ -116,11 +123,10 @@ driver.close()
 
 
 
+## Phase 2a:  downloading the files
 
-
-## Phase two: actually fetching the files
-
-def output_reader(proc, outq):
+def output_reader(proc, outq, output=''):
+    global debug
     lastread = 0
     out = b''
     while proc.poll() is None:
@@ -138,23 +144,119 @@ def output_reader(proc, outq):
             elif out!=b'' and (out[-1]==b'\n' or out[-3:]==b'/> '):
                 lines = out.decode('utf-8').split('\n')
                 for line in lines:
-                    # print('          ' + line)
+                    if debug:
+                        print('          ' + output + ' ' + line)
                     outq.put(line)
                 out = b''
         except ValueError:
             break
 
-def wait_for(q, s):
+def wait_for(q, s, output=False):
     out = []
     while len(out) == 0 or out[-1][:len(s)] != s:
-        out.append(q.get())
+        message = q.get()
+        if output:
+            print(message)
+        out.append(message)
     return out
 
+
+def sizeof_fmt(num, suffix='B'):
+    for unit in ['','Ki','Mi','Gi','Ti','Pi','Ei','Zi']:
+        if abs(num) < 1024.0:
+            return "%3.1f%s%s" % (num, unit, suffix)
+        num /= 1024.0
+    return "%.1f%s%s" % (num, 'Yi', suffix)
+
+
+def time_fmt(seconds):
+    seconds = int(seconds)
+    s = seconds % 60
+    m = (seconds - s) // 60 % 60
+    h = (seconds - s - m*60) // 3600
+    return '{0:0>2}:{1:0>2}:{2:0>2}'.format(h, m, s)
+
+
+def progressBar(current, max, length):
+    out = '['
+    n = floor(current / max * length)
+    return ('{0:#<%d}{1:.>%d}' % (n,length-n)).format('[', ']')
+
+
+class CadaverDownloader:
+    def __init__(self, filequeue):
+        self.filequeue = filequeue
+        self.messagequeue = Queue()
+        self.currentsite = ''
+        self.processedFiles = 0
+        self.processedSize = 0
+        self.startTime = time()
+        self.proc = Popen([], executable='/usr/bin/cadaver', stdin=PIPE, stdout=PIPE, stderr=PIPE)
+        fcntl(self.proc.stdout.fileno(), F_SETFL, O_NONBLOCK)
+        self.t = Thread(target=output_reader, args=(self.proc, self.messagequeue, 'download'))
+        self.t.start()
+        self.d = Thread(target=self.downloader, args=(self.proc, self.messagequeue, self.filequeue))
+        self.d.start()
+
+    def downloader(self, proc, messagequeue, filequeue):
+        while True:
+            f = filequeue.get()
+            if not f:
+                proc.stdin.write('quit\n'.encode())
+                proc.stdin.flush()
+                sleep(1)
+                proc.terminate()
+                print('Done downloading files!')
+                break
+            else:
+                self.downloadFile(proc, messagequeue, f)
+
+    def downloadFile(self, proc, messagequeue, fileTuple):
+        global totalsize
+        global totalfiles
+        root, internal_name, human_name, subdir, filename, filesize = fileTuple
+
+        if internal_name != self.currentsite:
+            proc.stdin.write('open https://t-square.gatech.edu/dav/{}\n'.format(internal_name).encode())
+            proc.stdin.flush()
+            wait_for(messagequeue, 'dav:/dav/')
+        dirpath = "{}{}{}".format(root, human_name, subdir)
+        if not exists(dirpath):
+            makedirs(dirpath)
+        filepath = "{}{}{}{}".format(root, human_name, subdir, filename)
+        if not exists(filepath) or stat(filepath).st_size != filesize:
+            proc.stdin.write('get "/dav/{}{}{}" "{}{}{}{}"\n'.format(internal_name, subdir, filename, root, human_name, subdir, filename).encode())
+            proc.stdin.flush()
+            # print('get "/dav/{}{}{}" "{}{}{}{}"\n'.format(internal_name, subdir, filematch.group(1), root, human_name, subdir, filematch.group(1)).encode())
+            wait_for(messagequeue, 'dav:/dav/')
+        self.processedFiles += 1
+        self.processedSize += filesize
+        elapsed = time() - self.startTime
+        perFile = elapsed / self.processedFiles
+        remaining = (totalfiles - self.processedFiles) * perFile
+        # print(human_name + subdir + filename)
+        print('Files: {} of {} | Size: {} of {} | Time: {} of {}  {}   '.format(self.processedFiles, totalfiles, sizeof_fmt(self.processedSize), sizeof_fmt(totalsize), time_fmt(elapsed), time_fmt(remaining), progressBar(self.processedFiles, totalfiles, 50)), end='\r')
+
+
+
+
+
+## Phase 2b: collecting the list of files
+
+filequeue = Queue()
+totalsize = 0
+totalfiles = 0
+totalsites = 0
+
+downloader = CadaverDownloader(filequeue)
+
 def process_directory(root, internal_name, human_name, subdir=''):
+    global totalsize
+    global totalfiles
     fullpath = root + human_name + subdir
-    if not exists(fullpath):
-        makedirs(fullpath)
-    print(human_name + subdir)
+    # if not exists(fullpath):
+    #     makedirs(fullpath)
+    # print(human_name + subdir)
     # proc.stdin.write('lcd "{}/{}"'.format(root, path)).encode()
     # proc.stdin.flush()
     # wait_for(q, 'dav:/dav/')
@@ -167,13 +269,10 @@ def process_directory(root, internal_name, human_name, subdir=''):
         filematch = filepat.match(line)
         if filematch:
             # print('file matched:     ' + filematch.group(1))
-            filepath = "{}{}{}{}".format(root, human_name, subdir, filematch.group(1))
-            print(human_name + subdir + filematch.group(1))
-            if not exists(filepath) or stat(filepath).st_size != int(filematch.group(2)):
-                proc.stdin.write('get "/dav/{}{}{}" "{}{}{}{}"\n'.format(internal_name, subdir, filematch.group(1), root, human_name, subdir, filematch.group(1)).encode())
-                proc.stdin.flush()
-                # print('get "/dav/{}{}{}" "{}{}{}{}"\n'.format(internal_name, subdir, filematch.group(1), root, human_name, subdir, filematch.group(1)).encode())
-                wait_for(q, 'dav:/dav/')
+            size = int(filematch.group(2))
+            totalsize += size
+            totalfiles += 1
+            filequeue.put((root, internal_name, human_name, subdir, filematch.group(1), size))
         else:
             dirmatch = dirpat.match(line)
             if dirmatch:
@@ -184,7 +283,6 @@ def process_directory(root, internal_name, human_name, subdir=''):
 
 
 print('Starting to fetch files...')
-numsites = len(site_links)
 currentnum = 0
 with Popen([], executable='/usr/bin/cadaver', stdin=PIPE, stdout=PIPE, stderr=PIPE) as proc:
     fcntl(proc.stdout.fileno(), F_SETFL, O_NONBLOCK)
@@ -192,7 +290,7 @@ with Popen([], executable='/usr/bin/cadaver', stdin=PIPE, stdout=PIPE, stderr=PI
     # fcntl(proc.stdin.fileno(), F_SETFL, O_NONBLOCK)
 
     q = Queue()
-    t = Thread(target=output_reader, args=(proc, q))
+    t = Thread(target=output_reader, args=(proc, q, 'file'))
     t.start()
     root_dir = ''
     proc.stdin.write(b'lpwd\n')
@@ -204,7 +302,7 @@ with Popen([], executable='/usr/bin/cadaver', stdin=PIPE, stdout=PIPE, stderr=PI
     wait_for(q, 'dav:')
 
     for (external_name, internal_name) in site_links:
-        print('Starting download of ' + external_name)
+        # print('Starting download of ' + external_name)
         proc.stdin.write('open https://t-square.gatech.edu/dav/{}\n'.format(internal_name).encode())
         proc.stdin.flush()
         wait_for(q, 'dav:/dav/')
@@ -214,9 +312,10 @@ with Popen([], executable='/usr/bin/cadaver', stdin=PIPE, stdout=PIPE, stderr=PI
         proc.stdin.flush()
         wait_for(q, 'dav:/dav/')
         currentnum += 1
-        print('\n\n\n\n\nFinished {} sites of {}\n\n\n\n\n'.format(currentnum, numsites))
     proc.stdin.write('quit\n'.encode())
     proc.stdin.flush()
 
 
-print('All finished!  Everything should be downloaded now.')
+
+
+print('Done enumerating files!  Still downloading, though.')
